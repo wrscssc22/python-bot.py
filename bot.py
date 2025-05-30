@@ -1,73 +1,90 @@
-import os from dotenv import load_dotenv import telebot
+import os
+import json
+from telegram import Update, ReplyKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from dotenv import load_dotenv
 
-تحميل متغيرات البيئة
+# تحميل متغيرات البيئة
+load_dotenv()
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
-load_dotenv() TOKEN = os.getenv("BOT_TOKEN") ADMIN_ID = os.getenv("ADMIN_ID")
+# تحميل بيانات المستخدمين
+if os.path.exists("users.json"):
+    with open("users.json", "r") as f:
+        users = json.load(f)
+else:
+    users = {}
 
-if not TOKEN or not ADMIN_ID: raise Exception("❌ BOT_TOKEN أو ADMIN_ID غير موجود في .env")
+def save_users():
+    with open("users.json", "w") as f:
+        json.dump(users, f, indent=2)
 
-ADMIN_ID = int(ADMIN_ID) bot = telebot.TeleBot(TOKEN)
+# /start command
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    chat_id = str(user.id)
+    args = context.args
+    referrer_id = args[0] if args else None
 
-قاموس الردود حسب الكلمات المفتاحية (يتم تحديثه ديناميكيًا من الأدمن)
+    if chat_id not in users:
+        users[chat_id] = {"balance": 0, "referrals": []}
 
-RESPONSES = { "مرحبا": "👋 أهلًا وسهلًا! كيف أقدر أساعدك؟", "أهلاً": "🌸 أهلًا بك! يسعدني تواصلك.", "السلام": "🍍 وعليكم السلام ورحمة الله وبركاته.", "زواج": "💍 لدينا عروض مميزة للزواج، تواصل معنا للتفاصيل.", "حناء": "🌿 نقش الحناء متاح بأنواع خليجية ويمنية فخمة.", "السعر": "💰 الأسعار تختلف حسب نوع الخدمة. راسلنا لمعرفة التفاصيل.", "الأسعار": "💰 الأسعار تختلف حسب نوع الخدمة. راسلنا لمعرفة التفاصيل.", "موقع": "📍 نحن متواجدون في صنعاء - للتحديد بدقة يرجى مراسلتنا.", "حجز": "📆 للحجز يرجى إرسال الاسم والخدمة المطلوبة والتاريخ.", "رقم": "📞 للتواصل معنا عبر الواتساب: 777xxxxxxx", "واتس": "📱 راسلينا على واتساب من خلال هذا الرابط: https://wa.me/967777xxxxxx", "عرض": "🔥 عروضنا الحالية: خصم 20٪ على جميع الخدمات هذا الشهر!", "تجربة": "✨ يمكن ترتيب تجربة مجانية حسب التوفر. راسلينا لحجز الموعد.", "متى": "🕒 نحن متواجدون من الساعة 9 صباحًا حتى 9 مساءً يوميًا.", "شكرا": "🙏 عفوًا! تحت أمرك في أي وقت.", "شكرًا": "😊 على الرحب والسعة!", "كم": "💬 يرجى تحديد نوع الخدمة لمعرفة السعر بدقة.", "وين": "📍 موقعنا في صنعاء - وسنرسل لك الموقع عند الحجز.", "إعلان": "📢 إعلان حصري! شاهدي التفاصيل هنا: https://vdbaa.com/fullpage.php?section=General&pub=353195&ga=g" }
+        # نظام الإحالة
+        if referrer_id and referrer_id != chat_id and referrer_id in users:
+            users[referrer_id]["balance"] += 15
+            users[referrer_id]["referrals"].append(chat_id)
+            await context.bot.send_message(
+                chat_id=int(referrer_id),
+                text=f"🎉 لقد حصلت على 15 دولار لإحالة {user.first_name}"
+            )
+        save_users()
 
-دالة للبحث عن رد مناسب
+    referral_link = f"https://t.me/{context.bot.username}?start={chat_id}"
+    keyboard = [
+        ["👤 الحساب", "💰 ربح المال من دعوة الاصدقاء 💰"],
+        ["🏦 سحب الأرباح", "🎁 المكافأة"],
+        ["🔎 ما هذا البوت", "📍 مشاهدة الإعلانات"]
+    ]
+    await update.message.reply_text(
+        f"🔥 قم بمشاركة هذا الرابط للحصول على 15 دولار عن كل إحالة 👇\n{referral_link}\n\n"
+        "💵 الحد الأدنى للسحب هو 500 دولار",
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    )
 
-def get_response(text): for keyword, response in RESPONSES.items(): if keyword in text: return response return "🤖 شكرًا لرسالتك! يرجى توضيح سؤالك أكثر لنتمكن من خدمتك."
+# التعامل مع الأزرار
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_user.id)
+    text = update.message.text
+    u = users.get(chat_id, {"balance": 0, "referrals": []})
 
-التعامل مع أي رسالة
-
-@bot.message_handler(func=lambda message: True) def handle_message(message): user_text = message.text.lower() user_id = message.from_user.id
-
-# أوامر الأدمن
-if user_id == ADMIN_ID:
-    if user_text.startswith("/اضف "):
-        try:
-            parts = user_text[5:].split("=>")
-            if len(parts) != 2:
-                raise ValueError
-            keyword = parts[0].strip()
-            reply = parts[1].strip()
-            RESPONSES[keyword] = reply
-            bot.reply_to(message, f"✅ تم إضافة الرد:\n{keyword} => {reply}")
-        except:
-            bot.reply_to(message, "❌ الصيغة غير صحيحة. استخدم: /اضف كلمة => الرد")
-        return
-
-    elif user_text.startswith("/حذف "):
-        keyword = user_text[6:].strip()
-        if keyword in RESPONSES:
-            del RESPONSES[keyword]
-            bot.reply_to(message, f"🗑️ تم حذف الرد المرتبط بـ: {keyword}")
+    if text == "👤 الحساب":
+        await update.message.reply_text(f"💼 حسابك:\nالرصيد: {u['balance']} دولار\nالإحالات: {len(u['referrals'])}")
+    elif text == "💰 ربح المال من دعوة الاصدقاء 💰":
+        link = f"https://t.me/{context.bot.username}?start={chat_id}"
+        await update.message.reply_text(f"🔗 رابط الإحالة الخاص بك:\n{link}")
+    elif text == "🏦 سحب الأرباح":
+        if u["balance"] >= 500:
+            await update.message.reply_text("✅ تم إرسال طلبك. سنتواصل معك خلال 24 ساعة.")
+            # إعلام الأدمن
+            await context.bot.send_message(ADMIN_ID, f"💸 طلب سحب جديد من: {update.effective_user.full_name} (ID: {chat_id})\nالرصيد: {u['balance']} دولار")
         else:
-            bot.reply_to(message, "❌ لم يتم العثور على هذه الكلمة.")
-        return
+            await update.message.reply_text(f"❌ الحد الأدنى للسحب هو 500 دولار. رصيدك: {u['balance']} دولار")
+    elif text == "🎁 المكافأة":
+        await update.message.reply_text("🎁 لا توجد مكافآت حالياً. تابعنا لاحقاً.")
+    elif text == "🔎 ما هذا البوت":
+        await update.message.reply_text("🤖 هذا البوت يمكنك من كسب المال من خلال دعوة الأصدقاء.")
+    elif text == "📍 مشاهدة الإعلانات":
+        await update.message.reply_text("📢 لا توجد إعلانات حالياً.")
+    else:
+        pass
 
-    elif user_text.startswith("/الردود"):
-        if RESPONSES:
-            msg = "📋 قائمة الردود الحالية:\n"
-            for k, v in RESPONSES.items():
-                msg += f"- {k} => {v}\n"
-            bot.reply_to(message, msg)
-        else:
-            bot.reply_to(message, "📭 لا توجد ردود بعد.")
-        return
+# تشغيل البوت
+if __name__ == '__main__':
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    elif user_text.startswith("/مساعدة"):
-        help_text = (
-            "🛠️ أوامر لوحة تحكم الأدمن:\n\n"
-            "/اضف كلمة => الرد  - لإضافة رد تلقائي\n"
-            "/حذف كلمة           - لحذف رد\n"
-            "/الردود             - عرض كل الردود\n"
-            "/مساعدة             - عرض هذه الرسالة"
-        )
-        bot.reply_to(message, help_text)
-        return
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-# رد عادي
-reply = get_response(user_text)
-bot.reply_to(message, reply)
-
-bot.polling()
-
+    print("✅ البوت يعمل الآن...")
+    app.run_polling()
